@@ -35,4 +35,4 @@ HydroWeb не просто сканирует; он ищет векторы, с�
 Для работы необходимы библиотеки `requests` и `rich`.
 
 ```bash
-pip install requests rich
+pip install requests rich zstandard 
